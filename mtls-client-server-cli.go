@@ -467,11 +467,17 @@ func startHTTPSServer(serverCertsPEMBytes []byte, serverPrivKeyPEMBytes []byte, 
 		TLSConfig:    serverTLSConf,
 	}
 
-	// goroutine in charge of shutting down the server when triggered.
+	done := make(chan struct{}, 1)
+
+	// async function in charge of shutting down the server when triggered.
 	go func() {
+		// ensure this goroutine terminated before program exits.
+		defer close(done)
+
 		// wait until closed by handleSignal goroutine.
 		<-exit
-		log.Printf("shutting down the mTLS web server ... please wait for 60 secs max")
+
+		log.Printf("shutting down the mTLS web server ... wait for 60 secs max")
 		ctx, _ := context.WithTimeout(context.Background(), 60*time.Second)
 
 		// Shutdown gracefully shuts down the server.
@@ -498,6 +504,8 @@ func startHTTPSServer(serverCertsPEMBytes []byte, serverPrivKeyPEMBytes []byte, 
 		// ListenAndServeTLS always returns a non-nil error. Shutdown or Close triggers ErrServerClosed.
 		log.Printf("failed to start https web server on %s:%s - errmsg: %v\n", serverIP, serverPort, err)
 	}
+
+	<-done
 }
 
 // handleSignal is a function that process SIGTERM from kill command or CTRL-C or more.
