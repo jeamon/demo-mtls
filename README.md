@@ -6,6 +6,9 @@ client or server mode through the mention of flag --client or --server respectiv
 both Root/server and Client CA certificates. These are saved to a fixed location on disk and deleted once server exits.
 
 
+* Click to watch a live [demo video](https://youtu.be/UjylweFUzL0) where server extract and computer the client's 
+common name and certificate fingerprint (which could be used as token during authorization).
+
 
 ## Table of contents
 * [Technologies](#technologies)
