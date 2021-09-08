@@ -1,4 +1,4 @@
-# auto-mtls-client-server-cli
+# auto-mtls-client-server
 
 This is a cross-platform go tool to demonstrate the implementation of mTLS (Mutual TLS) and how useful it can help
 to setup authorization on top of TLS certificate - known as Certificate Bound Token. This program could be run into
@@ -42,7 +42,7 @@ go build -o mtls-client-server-cli mtls-client-server-cli.go
 
 ```Usage:
     
-    mtls-client-server-cli [--client] [--server] [--help] [--version] [--certs <path-to-ca-certificates>] 
+mtls-client-server-cli [--client] [--server] [--help] [--version] [--certs <path-to-ca-certificates>] 
 
 
 Options:
