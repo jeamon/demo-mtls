@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -14,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/big"
 	"net"
@@ -21,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -35,6 +38,10 @@ import (
 // Author   : Jerome AMON
 // Created  : 06 September 2021
 
+// in client mode defines the path as default
+// location of the "certificates" folder.
+var certsFolder string
+
 // location of server and client CA certs.
 const clientcertspath = "certificates/client/"
 const servercertspath = "certificates/server/"
@@ -42,6 +49,9 @@ const servercertspath = "certificates/server/"
 // fixed name of server and client CA certs.
 const servercacerts = "server-ca.crt"
 const clientcacerts = "client-ca.crt"
+
+// client CA private key.
+const clientcaprivkey = "client-ca.key"
 
 // store server CA private key and certificate in PEM format.
 var rootCAPEM *bytes.Buffer
@@ -270,6 +280,8 @@ func GenerateClientCACerts() {
 		os.Exit(1)
 	}
 
+	log.Println("successfully created clients CA certificate.")
+
 	// pem encode the certificate.
 	clientsCAPEM = new(bytes.Buffer)
 	err = pem.Encode(clientsCAPEM, &pem.Block{
@@ -281,6 +293,15 @@ func GenerateClientCACerts() {
 		log.Printf("failed to pem encode clients CA certificate - errmsg : %v\n", err)
 		os.Exit(2)
 	}
+
+	// dump CA certificate into a file.
+	if err := os.WriteFile(clientcertspath+clientcacerts, clientsCAPEM.Bytes(), 0644); err != nil {
+		log.Printf("failed to save on disk the clients CA certificate - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	log.Println("successfully pem encoded and saved clients CA private key.")
+
 	// pem encode the private key.
 	clientsCAPrivKeyPEM = new(bytes.Buffer)
 	err = pem.Encode(clientsCAPrivKeyPEM, &pem.Block{
@@ -293,13 +314,16 @@ func GenerateClientCACerts() {
 		os.Exit(2)
 	}
 
-	// dump CA certificate into a file.
-	if err := os.WriteFile(clientcertspath+clientcacerts, clientsCAPEM.Bytes(), 0644); err != nil {
-		log.Printf("failed to save on disk the clients CA certificate - errmsg : %v\n", err)
+	// dump CA private key into a file.
+	if err := os.WriteFile(clientcertspath+clientcaprivkey, clientsCAPrivKeyPEM.Bytes(), 0644); err != nil {
+		log.Printf("failed to save on disk the clients CA private key - errmsg : %v\n", err)
 		os.Exit(1)
 	}
 
-	log.Println("successfully created and saved clients CA certificate.")
+	log.Println("successfully pem encoded and saved clients CA private key.")
+
+	// flush the memory buffer.
+	clientsCAPrivKeyPEM.Reset()
 }
 
 // GenerateServerCerts auto creates web server certificate and signs it with root CA certs.
@@ -405,9 +429,206 @@ func GenerateServerCerts(rootCA *x509.Certificate, rootCAPrivKey *ecdsa.PrivateK
 	return serverCertsPEM.Bytes(), serverPrivKeyPEM.Bytes()
 }
 
-func GenerateClientCerts() {}
-func runIntoClientMode()   {}
+// GenerateClientCerts auto creates https client certificate and signs it with Clients CA certs.
+func GenerateClientCerts(clientsCA *x509.Certificate, clientsCAPrivKey *rsa.PrivateKey) ([]byte, []byte) {
 
+	// https://pkg.go.dev/crypto/x509#Certificate
+	clientCerts := &x509.Certificate{
+		// https://pkg.go.dev/crypto/x509#SignatureAlgorithm
+		SignatureAlgorithm: x509.SHA384WithRSA,
+		// https://pkg.go.dev/crypto/x509#PublicKeyAlgorithm
+		PublicKeyAlgorithm: x509.RSA,
+		// generate a random serial number.
+		SerialNumber: big.NewInt(20210),
+		// define the PKIX (Internet Public Key Infrastructure Using X.509).
+		Subject: pkix.Name{
+			Organization:  []string{"Localhost Clients, LLC."},
+			Country:       []string{"CI"},
+			Province:      []string{"Abidjan"},
+			Locality:      []string{"Cocody"},
+			StreetAddress: []string{"Rue Clients"},
+			PostalCode:    []string{"000-client"},
+			CommonName:    "Client A",
+		},
+
+		NotBefore: time.Now(),
+		// make it valid for 1 day.
+		NotAfter: time.Now().Add(time.Hour * 24),
+		// means this is not the CA certificate.
+		IsCA: false,
+		// https://pkg.go.dev/crypto/x509#ExtKeyUsage
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		// https://pkg.go.dev/crypto/x509#KeyUsage
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		BasicConstraintsValid: true,
+
+		EmailAddresses: []string{"client-email@localhost.local"},
+	}
+
+	// generate a public & private key for the certificate.
+	clientPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Printf("failed to generate client private key - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	log.Println("successfully created rsa-based key for client certificate.")
+
+	// create the client certificate and sign with ClientsCA certificate.
+	// https://pkg.go.dev/crypto/x509#CreateCertificate
+	clientCertsBytes, err := x509.CreateCertificate(rand.Reader, clientCerts, clientsCA, &clientPrivKey.PublicKey, clientsCAPrivKey)
+	if err != nil {
+		log.Printf("failed to create client certificate - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	// pem encode the certificate.
+	clientCertsPEM := new(bytes.Buffer)
+	err = pem.Encode(clientCertsPEM, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: clientCertsBytes,
+	})
+
+	if err != nil {
+		log.Printf("failed to pem encode client certificate - errmsg : %v\n", err)
+		os.Exit(2)
+	}
+	// pem encode the private key.
+	clientPrivKeyPEM := new(bytes.Buffer)
+	err = pem.Encode(clientPrivKeyPEM, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(clientPrivKey),
+	})
+
+	if err != nil {
+		log.Printf("failed to pem encode client private key - errmsg : %v\n", err)
+		os.Exit(2)
+	}
+
+	log.Println("successfully created & pem encoded client certificate & private key.")
+
+	return clientCertsPEM.Bytes(), clientPrivKeyPEM.Bytes()
+}
+
+// loadClientsCAInfos reads (from the disk) the content of clients CA's certs and
+// private key files then parse them to return the x509 certificate and private key.
+func loadClientsCAInfosFromDisk() (clientsCA *x509.Certificate, clientsCAPrivKey *rsa.PrivateKey) {
+	var err error
+	// load the clients CA pem-encoded certificate from disk.
+	clientsCAFileData, err := ioutil.ReadFile(filepath.Join(certsFolder, clientcertspath+clientcacerts))
+	if err != nil {
+		log.Printf("failed to read client CA certificate file from disk - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	block, _ := pem.Decode(clientsCAFileData)
+	if block == nil || block.Type != "CERTIFICATE" {
+		log.Printf("failed to decode PEM block containing clients CA certificate")
+		os.Exit(2)
+	}
+
+	clientsCA, err = x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		log.Printf("failed to parse client CA certificate from disk - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	// load the clients CA pem-encoded private key from disk.
+	clientsCAPrivKeyFileData, err := ioutil.ReadFile(clientcertspath + clientcaprivkey)
+	if err != nil {
+		log.Printf("failed to load client CA certificate from disk - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	block, _ = pem.Decode(clientsCAPrivKeyFileData)
+	if block == nil || block.Type != "RSA PRIVATE KEY" {
+		log.Printf("failed to decode PEM block containing clients CA private key")
+		os.Exit(2)
+	}
+
+	clientsCAPrivKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		log.Printf("failed to parse client CA private key from disk - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	return
+}
+
+func startHTTPSClient(clientCertsPEMBytes []byte, clientPrivKeyPEMBytes []byte, exit <-chan struct{}) {
+	// constructs client TLS certificate from generated certs & private key.
+	clientTLSCerts, err := tls.X509KeyPair(clientCertsPEMBytes, clientPrivKeyPEMBytes)
+	if err != nil {
+		log.Printf("failed to load server pem certificate and key - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	// load the root (servers) CA PEM-encoded certificate from disk.
+	rootCACert, err := ioutil.ReadFile(filepath.Join(certsFolder, servercertspath+servercacerts))
+	if err != nil {
+		log.Printf("failed to load root/server CA certificate from disk - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(rootCACert)
+
+	// create a HTTPS client and supply the created CA pool
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{clientTLSCerts},
+				RootCAs:      caCertPool,
+			},
+		},
+	}
+
+	// initiate a GET Request towards the https server with context.
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://localhost:8443/", nil)
+	if err != nil {
+		log.Printf("failed to constructs the request - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	// async to cancel the request if requested by user.
+	go func() {
+		<-exit
+		cancel()
+	}()
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("failed to send the request to server - errmsg : %v\n", err)
+		os.Exit(1)
+	}
+
+	// read the response body.
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("failed to read the server response - errmsg : %v\n", err)
+	}
+
+	fmt.Printf("%s\n", body)
+}
+
+// runIntoClientMode runs each functions needed to spin up the client.
+func runIntoClientMode() {
+
+	// background routine to handle signals.
+	exit := make(chan struct{}, 1)
+	go handleSignal(exit, false)
+
+	clientsCA, clientsCAPrivKey := loadClientsCAInfosFromDisk()
+
+	// generate client private key and certificate then sign it with clients CA.
+	clientCertsPEMBytes, clientPrivKeyPEMBytes := GenerateClientCerts(clientsCA, clientsCAPrivKey)
+
+	startHTTPSClient(clientCertsPEMBytes, clientPrivKeyPEMBytes, exit)
+}
+
+// runIntoServerMode runs each functions needed to spin up the server.
 func runIntoServerMode() {
 
 	// background routine to handle signals.
@@ -421,11 +642,8 @@ func runIntoServerMode() {
 	GenerateClientCACerts()
 	// generate server keys and certs.
 	serverCertsPEMBytes, serverPrivKeyPEMBytes := GenerateServerCerts(rootCA, rootCAPrivKey)
-	// start the secure web server.
+	// start the secure web server and block until shut down.
 	startHTTPSServer(serverCertsPEMBytes, serverPrivKeyPEMBytes, exit)
-
-	// block until channel closed by signal goroutine due to CTRL-C.
-	// <-exit
 }
 
 func startHTTPSServer(serverCertsPEMBytes []byte, serverPrivKeyPEMBytes []byte, exit <-chan struct{}) {
@@ -451,16 +669,37 @@ func startHTTPSServer(serverCertsPEMBytes []byte, serverPrivKeyPEMBytes []byte, 
 	// base http router.
 	router := http.NewServeMux()
 
-	// simpple inline handler function for root URI.
+	// simple inline handler function to compute client certificate fingerprint.
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "Hello From mTLS Server.\n")
+		log.Printf("[ip: %s] [method: %s] [url: %s] [browser: %s]", r.RemoteAddr, r.Method, r.URL.Path, r.UserAgent())
+
+		// PeerCertificates are the parsed certificates sent by the peer, in the
+		// order in which they were sent. The first element is the leaf certificate
+		// that the connection is verified against.it cannot be empty because
+		// Config.ClientAuth is RequireAndVerifyClientCert on server side.
+		clientCerts := r.TLS.PeerCertificates[0]
+		// compute the fingerprint and display into hexadecimal.
+		fingerprint := sha1.Sum(clientCerts.Raw)
+		var buf bytes.Buffer
+		for i, f := range fingerprint {
+			if i > 0 {
+				fmt.Fprintf(&buf, ":")
+			}
+			fmt.Fprintf(&buf, "%02X", f)
+		}
+		// this fingerprint could be used as token so for further
+		// authorization validation. This is certificate bound token.
+		response := fmt.Sprintf("[Common Name]: %s - [Fingerprint]: %s\n", clientCerts.Subject.CommonName, buf.String())
+		fmt.Println(response)
+		io.WriteString(w, fmt.Sprintf("Hello From mTLS Server. Please Find Below Your Certificate Details.\n%s", response))
+		buf.Reset()
 	})
 
 	// non-secure and secure webservers parameters.
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", serverIP, serverPort),
 		Handler:      router,
-		ErrorLog:     log.New(os.Stdout, "[https] ", log.LstdFlags),
+		ErrorLog:     log.New(os.Stdout, "", log.LstdFlags),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -498,7 +737,7 @@ func startHTTPSServer(serverCertsPEMBytes []byte, serverPrivKeyPEMBytes []byte, 
 
 	}()
 
-	log.Printf("started secure mTLS web server (https) at %s:%s ...", serverIP, serverPort)
+	log.Printf("started secure mTLS web server at %s:%s ...", serverIP, serverPort)
 	// start the HTTPS web server and block until error event happen.
 	if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 		// ListenAndServeTLS always returns a non-nil error. Shutdown or Close triggers ErrServerClosed.
@@ -538,6 +777,7 @@ func main() {
 
 	flag.StringVar(&serverIP, "ip", "localhost", "specify the server ip address")
 	flag.StringVar(&serverPort, "port", "8443", "specify the server port")
+	flag.StringVar(&certsFolder, "certs", ".", "specify the location of certificates directory")
 
 	clearConsole()
 
