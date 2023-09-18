@@ -1,4 +1,4 @@
-# auto-mtls-client-server
+# demo-mtls
 
 This is a cross-platform go tool to demonstrate the implementation of mTLS (Mutual TLS) and how useful it can help
 to setup authorization on top of TLS certificate - known as Certificate Bound Token. This program could be run into
@@ -6,7 +6,7 @@ client or server mode through the mention of flag --client or --server respectiv
 both Root/server and Client CA certificates. These are saved to a fixed location on disk and deleted once server exits.
 
 
-* Click to watch a live [demo video](https://youtu.be/UjylweFUzL0) where server extract and computer the client's 
+* Click to watch a live [demo video](https://youtu.be/UjylweFUzL0) where server extract and compute the client's 
 common name and certificate fingerprint (which could be used as token during authorization).
 
 
@@ -31,11 +31,11 @@ If your system has [Go >= 1.16](https://golang.org/dl/) you can pull the codebas
 
 ```
 # build the auto-mtls-client-server-cli program on windows
-git clone https://github.com/jeamon/auto-self-signed-mtls-with-certs-bound-token.git && cd auto-self-signed-mtls-with-certs-bound-token
+git clone https://github.com/jeamon/demo-mtls.git && cd demo-mtls
 go build -o mtls-client-server-cli.exe mtls-client-server-cli.go
 
 # build the auto-mtls-client-server-cli program on linux and others
-git clone https://github.com/jeamon/auto-self-signed-mtls-with-certs-bound-token.git && cd auto-self-signed-mtls-with-certs-bound-token
+git clone https://github.com/jeamon/demo-mtls.git && cd demo-mtls
 go build -o mtls-client-server-cli mtls-client-server-cli.go
 ```
 
@@ -89,4 +89,4 @@ Examples:
 
 ## License
 
-please check & read [the license details](https://github.com/jeamon/auto-self-signed-mtls-with-certs-bound-token/blob/master/LICENSE) or [reach out to me](https://blog.cloudmentor-scale.com/contact) before any action.
+please check & read [the license details](https://github.com/jeamon/demo-mtls/blob/master/LICENSE) or [reach out to me](https://blog.cloudmentor-scale.com/contact) before any action.
